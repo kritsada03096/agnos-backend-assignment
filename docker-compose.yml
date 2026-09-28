@@ -1,0 +1,77 @@
+name: agnos
+
+x-app: &app
+  image: agnos-api:local
+  build: .
+  environment: &app-env
+    DATABASE_URL: postgres://${DB_USER:-agnos}:${DB_PASSWORD:?Set DB_PASSWORD in .env}@postgres:5432/${DB_NAME:-agnos}?sslmode=disable
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+    STAFF_PROVISIONING_KEY: ${STAFF_PROVISIONING_KEY:?Set STAFF_PROVISIONING_KEY in .env}
+    JWT_TTL: ${JWT_TTL:-1h}
+    HIS_TIMEOUT: ${HIS_TIMEOUT:-5s}
+    GIN_MODE: release
+    HOSPITAL_A_API_URL: ${HOSPITAL_A_API_URL:-https://hospital-a.api.co.th}
+    HOSPITAL_B_API_URL: ${HOSPITAL_B_API_URL:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-agnos}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-agnos}
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    <<: *app
+    command: ["seed"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  backend:
+    <<: *app
+    restart: unless-stopped
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  nginx:
+    image: nginx:1.28-alpine
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  mock-his:
+    <<: *app
+    profiles: ["demo"]
+    entrypoint: ["/app/mockhis"]
+    command: []
+    environment: {}
+
+volumes:
+  postgres_data:
