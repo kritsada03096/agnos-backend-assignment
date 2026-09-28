@@ -15,22 +15,35 @@ try {
     $dockerPath = if ($docker) { $docker.Source } else { Join-Path $desktopRoot 'resources\bin\docker.exe' }
     if (-not (Test-Path -LiteralPath $dockerPath)) { throw 'Docker Desktop is not installed.' }
 
+    $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    if (-not $computer.HypervisorPresent) {
+        throw 'Windows hypervisor is not running. Verify Virtual Machine Platform is enabled and restart normally. If a previous restart rolled the feature back, inspect Windows Setup/CBS logs before retrying.'
+    }
+
     if (-not (Get-Process -Name 'com.docker.backend' -ErrorAction SilentlyContinue)) {
         Start-Process -FilePath (Join-Path $desktopRoot 'Docker Desktop.exe') -WindowStyle Hidden
     }
     Write-Output 'Waiting for Docker Engine (restart Windows first if WSL was just installed)...'
     $ready = $false
     $deadline = (Get-Date).AddMinutes(3)
+    $probeRoot = Join-Path $projectRoot '.cache'
+    New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+    $probeOutput = Join-Path $probeRoot "docker-probe-$PID.out"
+    $probeError = Join-Path $probeRoot "docker-probe-$PID.err"
     while ((Get-Date) -lt $deadline) {
-        # Native stderr is suppressed during engine startup, without hiding subsequent errors.
-        $previousPreference = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        & $dockerPath info --format '{{.ServerVersion}}' 2>$null | Out-Null
-        $engineExitCode = $LASTEXITCODE
-        $ErrorActionPreference = $previousPreference
-        if ($engineExitCode -eq 0) { $ready = $true; break }
+        # Bound each probe: an unready Desktop proxy can leave docker info hanging.
+        $probe = Start-Process -FilePath $dockerPath -ArgumentList 'info','--format','{{.ServerVersion}}' -WindowStyle Hidden -RedirectStandardOutput $probeOutput -RedirectStandardError $probeError -PassThru
+        if ($probe.WaitForExit(5000)) {
+            $version = (Get-Content -LiteralPath $probeOutput -Raw -ErrorAction SilentlyContinue)
+            if ($probe.ExitCode -eq 0 -and $version -match '^\s*\d+\.\d+\.\d+') { $ready = $true; break }
+        } else {
+            $probe.Kill()
+            $probe.WaitForExit()
+        }
+        $probe.Dispose()
         Start-Sleep -Seconds 5
     }
+    if ($probe) { $probe.Dispose() }
     if (-not $ready) { throw 'Docker Engine is not ready. Open Docker Desktop and resolve its startup message; a Windows restart may be required.' }
 
     & $dockerPath compose --profile demo config --quiet

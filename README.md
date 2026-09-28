@@ -2,6 +2,32 @@
 
 Go/Gin API with PostgreSQL (pgx), bcrypt, JWT, configurable HIS integration, Docker Compose and Nginx. Staff can only search/import patients within their hospital.
 
+## Native Windows fallback
+
+On this machine, PostgreSQL 16.15 is installed as the dedicated automatic `agnos-postgresql16` Windows service. The user reported a blue screen after enabling Virtual Machine Platform, and Windows rolled the feature back; the precise crash cause remains unknown. Native mode runs Go and mock HIS directly on Windows. Docker/Nginx remain available in the repository for a compatible environment; native HTTP requests go directly to Go.
+
+After PostgreSQL installation and initial creation of the database/user matching `.env`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-native.ps1 -Verify
+```
+
+The script builds the binaries, runs migrations and hospital seed, launches the API/mock HIS bound to loopback, verifies the API, runs tests when `-Verify` is supplied, and requests the saved `Agnos-Local` DBeaver connection. It reads actual credentials from `.env`; local values may differ from the examples in this README. It overrides HIS URLs for native processes without changing Docker's `.env` configuration.
+
+- API: `http://127.0.0.1:8080` (or `HTTP_PORT`)
+- PostgreSQL: `localhost:5432`, database/user `agnos`; password is `DB_PASSWORD` in `.env`
+- API/mock process IDs and logs: `.cache/native/`
+- PostgreSQL data: `C:\Program Files\PostgreSQL\16\data` (separate from Docker's volume)
+- PostgreSQL administrator password: ignored `.env.postgres-admin`; the app uses its own non-superuser account
+
+To stop the API/mock before rebuilding changes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-native.ps1
+```
+
+PostgreSQL's Windows service remains running and its data is preserved. After reboot, rerun `start-native.ps1` to launch the API. Native PostgreSQL and Compose PostgreSQL cannot both publish port 5432; stop one or change the configured host port before switching modes. Their data stores are independent.
+
 ## Quick start: local demo
 
 Requires Docker Engine/Desktop and Docker Compose v2. All fixture patient data is fictional.

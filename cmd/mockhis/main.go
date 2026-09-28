@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -24,6 +25,10 @@ func main() {
 			"date_of_birth": "1990-01-01", "phone_number": "0800000000", "email": "demo-" + hospital + "@example.test", "gender": "M",
 		})
 	})
-	server := &http.Server{Addr: ":8090", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	address := os.Getenv("MOCK_HIS_ADDR")
+	if address == "" {
+		address = ":8090"
+	}
+	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(server.ListenAndServe())
 }
