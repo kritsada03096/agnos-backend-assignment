@@ -1,0 +1,581 @@
+package pgtype_test
+
+import (
+	"context"
+	"encoding/json"
+	"math"
+	"math/big"
+	"math/rand/v2"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxtest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func mustParseBigInt(t *testing.T, src string) *big.Int {
+	i := &big.Int{}
+	if _, ok := i.SetString(src, 10); !ok {
+		t.Fatalf("could not parse big.Int: %s", src)
+	}
+	return i
+}
+
+func isExpectedEqNumeric(a any) func(any) bool {
+	return func(v any) bool {
+		aa := a.(pgtype.Numeric)
+		vv := v.(pgtype.Numeric)
+
+		if aa.Valid != vv.Valid {
+			return false
+		}
+
+		// If NULL doesn't matter what the rest of the values are.
+		if !aa.Valid {
+			return true
+		}
+
+		if !(aa.NaN == vv.NaN && aa.InfinityModifier == vv.InfinityModifier) {
+			return false
+		}
+
+		// If NaN or InfinityModifier are set then Int and Exp don't matter.
+		if aa.NaN || aa.InfinityModifier != pgtype.Finite {
+			return true
+		}
+
+		aaInt := (&big.Int{}).Set(aa.Int)
+		vvInt := (&big.Int{}).Set(vv.Int)
+
+		if aa.Exp < vv.Exp {
+			mul := (&big.Int{}).Exp(big.NewInt(10), big.NewInt(int64(vv.Exp-aa.Exp)), nil)
+			vvInt.Mul(vvInt, mul)
+		} else if aa.Exp > vv.Exp {
+			mul := (&big.Int{}).Exp(big.NewInt(10), big.NewInt(int64(aa.Exp-vv.Exp)), nil)
+			aaInt.Mul(aaInt, mul)
+		}
+
+		return aaInt.Cmp(vvInt) == 0
+	}
+}
+
+func mustParseNumeric(t *testing.T, src string) pgtype.Numeric {
+	var n pgtype.Numeric
+	plan := pgtype.NumericCodec{}.PlanScan(nil, pgtype.NumericOID, pgtype.TextFormatCode, &n)
+	require.NotNil(t, plan)
+	err := plan.Scan([]byte(src), &n)
+	require.NoError(t, err)
+	return n
+}
+
+func TestNumericScanScientificPreservesPrecision(t *testing.T) {
+	tests := []struct {
+		src  string
+		want pgtype.Numeric
+	}{
+		{
+			src:  "1234567890123456789e0",
+			want: pgtype.Numeric{Int: mustParseBigInt(t, "1234567890123456789"), Valid: true},
+		},
+		{
+			src:  "1.234567890123456789e5",
+			want: pgtype.Numeric{Int: mustParseBigInt(t, "1234567890123456789"), Exp: -13, Valid: true},
+		},
+		{
+			src:  "1e131071",
+			want: pgtype.Numeric{Int: big.NewInt(1), Exp: 131071, Valid: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			var got pgtype.Numeric
+			require.NoError(t, got.ScanScientific(tt.src))
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNumericScanScientificErrors(t *testing.T) {
+	// Errors report the string the caller passed in, not an internal rewrite of
+	// it, and do not leak strconv's wording.
+	for _, tt := range []struct {
+		src     string
+		wantErr string
+	}{
+		{src: "1e", wantErr: "1e is not a number"},
+		{src: "1e+", wantErr: "1e+ is not a number"},
+		{src: "1e1.5", wantErr: "1e1.5 is not a number"},
+		{src: "1e5e5", wantErr: "1e5e5 is not a number"},
+		{src: "1.2.3e4", wantErr: "1.2.3e4 is not a number"},
+		{src: "e5", wantErr: "e5 is not a number"},
+		{src: "1.2.3", wantErr: "1.2.3 is not a number"},
+		{src: "1e99999999999999999999", wantErr: "1e99999999999999999999 exponent out of range"},
+		{src: "1000e2147483647", wantErr: "1000e2147483647 exponent out of range"},
+		{src: "1e131072", wantErr: "1e131072 exponent out of range"},
+		{src: "1e-32768", wantErr: "1e-32768 exponent out of range"},
+	} {
+		t.Run(tt.src, func(t *testing.T) {
+			var n pgtype.Numeric
+			require.EqualError(t, n.ScanScientific(tt.src), tt.wantErr)
+		})
+	}
+}
+
+func TestNumericCodec(t *testing.T) {
+	skipCockroachDB(t, "server formats numeric text format differently")
+
+	max := new(big.Int).Exp(big.NewInt(10), big.NewInt(147454), nil)
+	max.Add(max, big.NewInt(1))
+	longestNumeric := pgtype.Numeric{Int: max, Exp: -16383, Valid: true}
+
+	pgxtest.RunValueRoundTripTests(context.Background(), t, defaultConnTestRunner, nil, "numeric", []pgxtest.ValueRoundTripTest{
+		{Param: mustParseNumeric(t, "1"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "1"))},
+		{Param: mustParseNumeric(t, "3.14159"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "3.14159"))},
+		{Param: mustParseNumeric(t, "100010001"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "100010001"))},
+		{Param: mustParseNumeric(t, "100010001.0001"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "100010001.0001"))},
+		{Param: mustParseNumeric(t, "4237234789234789289347892374324872138321894178943189043890124832108934.43219085471578891547854892438945012347981"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "4237234789234789289347892374324872138321894178943189043890124832108934.43219085471578891547854892438945012347981"))},
+		{Param: mustParseNumeric(t, "0.8925092023480223478923478978978937897879595901237890234789243679037419057877231734823098432903527585734549035904590854890345905434578345789347890402348952348905890489054234237489234987723894789234"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "0.8925092023480223478923478978978937897879595901237890234789243679037419057877231734823098432903527585734549035904590854890345905434578345789347890402348952348905890489054234237489234987723894789234"))},
+		{Param: mustParseNumeric(t, "0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000123"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000123"))},
+		{Param: mustParseNumeric(t, "67"+strings.Repeat("0", 44535)+".0"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "67"+strings.Repeat("0", 44535)+".0"))},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "243723409723490243842378942378901237502734019231380123"), Exp: 23790, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "243723409723490243842378942378901237502734019231380123"), Exp: 23790, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "2437"), Exp: 23790, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "2437"), Exp: 23790, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 80, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 80, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 81, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 81, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 82, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 82, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 83, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 83, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 84, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "43723409723490243842378942378901237502734019231380123"), Exp: 84, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "913423409823409243892349028349023482934092340892390101"), Exp: -14021, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "913423409823409243892349028349023482934092340892390101"), Exp: -14021, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -90, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -90, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -91, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -91, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -92, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -92, Valid: true})},
+		{Param: pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -93, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{Int: mustParseBigInt(t, "13423409823409243892349028349023482934092340892390101"), Exp: -93, Valid: true})},
+		{Param: pgtype.Numeric{NaN: true, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{NaN: true, Valid: true})},
+		{Param: longestNumeric, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(longestNumeric)},
+		{Param: mustParseNumeric(t, "1"), Result: new(int64), Test: isExpectedEq(int64(1))},
+		{Param: math.NaN(), Result: new(float64), Test: func(a any) bool { return math.IsNaN(a.(float64)) }},
+		{Param: float32(math.NaN()), Result: new(float32), Test: func(a any) bool { return math.IsNaN(float64(a.(float32))) }},
+		{Param: int64(-1), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "-1"))},
+		{Param: int64(0), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "0"))},
+		{Param: int64(1), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "1"))},
+		{Param: int64(math.MinInt64), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, strconv.FormatInt(math.MinInt64, 10)))},
+		{Param: int64(math.MinInt64 + 1), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, strconv.FormatInt(math.MinInt64+1, 10)))},
+		{Param: int64(math.MaxInt64), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, strconv.FormatInt(math.MaxInt64, 10)))},
+		{Param: int64(math.MaxInt64 - 1), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, strconv.FormatInt(math.MaxInt64-1, 10)))},
+		{Param: uint64(100), Result: new(uint64), Test: isExpectedEq(uint64(100))},
+		{Param: uint64(math.MaxUint64), Result: new(uint64), Test: isExpectedEq(uint64(math.MaxUint64))},
+		{Param: uint(math.MaxUint), Result: new(uint), Test: isExpectedEq(uint(math.MaxUint))},
+		{Param: uint(100), Result: new(uint), Test: isExpectedEq(uint(100))},
+		{Param: "1.23", Result: new(string), Test: isExpectedEq("1.23")},
+		{Param: pgtype.Numeric{}, Result: new(pgtype.Numeric), Test: isExpectedEq(pgtype.Numeric{})},
+		{Param: nil, Result: new(pgtype.Numeric), Test: isExpectedEq(pgtype.Numeric{})},
+		{Param: mustParseNumeric(t, "1"), Result: new(string), Test: isExpectedEq("1")},
+		{Param: pgtype.Numeric{NaN: true, Valid: true}, Result: new(string), Test: isExpectedEq("NaN")},
+	})
+
+	pgxtest.RunValueRoundTripTests(context.Background(), t, defaultConnTestRunner, nil, "int8", []pgxtest.ValueRoundTripTest{
+		{Param: mustParseNumeric(t, "-1"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "-1"))},
+		{Param: mustParseNumeric(t, "0"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "0"))},
+		{Param: mustParseNumeric(t, "1"), Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(mustParseNumeric(t, "1"))},
+	})
+}
+
+func TestNumericCodecInfinity(t *testing.T) {
+	skipCockroachDB(t, "server formats numeric text format differently")
+	skipPostgreSQLVersionLessThan(t, 14)
+
+	pgxtest.RunValueRoundTripTests(context.Background(), t, defaultConnTestRunner, nil, "numeric", []pgxtest.ValueRoundTripTest{
+		{Param: math.Inf(1), Result: new(float64), Test: isExpectedEq(math.Inf(1))},
+		{Param: float32(math.Inf(1)), Result: new(float32), Test: isExpectedEq(float32(math.Inf(1)))},
+		{Param: math.Inf(-1), Result: new(float64), Test: isExpectedEq(math.Inf(-1))},
+		{Param: float32(math.Inf(-1)), Result: new(float32), Test: isExpectedEq(float32(math.Inf(-1)))},
+		{Param: pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true})},
+		{Param: pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true})},
+		{Param: pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true}, Result: new(string), Test: isExpectedEq("Infinity")},
+		{Param: pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, Result: new(string), Test: isExpectedEq("-Infinity")},
+	})
+}
+
+// TestNumericBinaryDecodeUnnormalizedZero ensures the binary decoder does not
+// hang on a zero value encoded with ndigits > 0. PostgreSQL always normalizes
+// zero to ndigits == 0, but other servers speaking the same wire protocol
+// (e.g. CockroachDB) and connection poolers may send an unnormalized zero. The
+// trailing-zero reduction loop divided such a value by 10 forever because
+// 0 % 10 == 0, spinning the CPU indefinitely.
+func TestNumericBinaryDecodeUnnormalizedZero(t *testing.T) {
+	// ndigits=1, weight=0, sign=0 (positive), dscale=0, single base-10000 digit = 0.
+	src := []byte{
+		0x00, 0x01, // ndigits
+		0x00, 0x00, // weight
+		0x00, 0x00, // sign
+		0x00, 0x00, // dscale
+		0x00, 0x00, // digit[0]
+	}
+
+	done := make(chan error, 1)
+	var n pgtype.Numeric
+	go func() {
+		plan := pgtype.NumericCodec{}.PlanScan(nil, pgtype.NumericOID, pgtype.BinaryFormatCode, &n)
+		require.NotNil(t, plan)
+		done <- plan.Scan(src, &n)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		require.True(t, n.Valid)
+		require.False(t, n.NaN)
+		require.Equal(t, pgtype.Finite, n.InfinityModifier)
+		require.Equal(t, 0, n.Int.Sign())
+	case <-time.After(5 * time.Second):
+		t.Fatal("decoding unnormalized zero did not terminate (infinite loop)")
+	}
+}
+
+func TestNumericBinaryEncodeExponentOutOfRange(t *testing.T) {
+	// The binary format stores weight and dscale as int16. Exponents beyond what
+	// those fields can hold used to be silently truncated, encoding a completely
+	// different value.
+	for _, tt := range []struct {
+		name       string
+		n          pgtype.Numeric
+		encodeable bool
+	}{
+		{name: "largest encodable exponent", n: pgtype.Numeric{Int: big.NewInt(1), Exp: 131071, Valid: true}, encodeable: true},
+		{name: "weight overflows by one", n: pgtype.Numeric{Int: big.NewInt(1), Exp: 131072, Valid: true}},
+		{name: "weight wraps to a smaller positive", n: pgtype.Numeric{Int: big.NewInt(1), Exp: 300000, Valid: true}},
+		{name: "maximum exponent", n: pgtype.Numeric{Int: big.NewInt(1), Exp: math.MaxInt32, Valid: true}},
+		{name: "smallest encodable exponent", n: pgtype.Numeric{Int: big.NewInt(1), Exp: -math.MaxInt16, Valid: true}, encodeable: true},
+		{name: "dscale overflows by one", n: pgtype.Numeric{Int: big.NewInt(1), Exp: -math.MaxInt16 - 1, Valid: true}},
+		{name: "minimum exponent", n: pgtype.Numeric{Int: big.NewInt(1), Exp: math.MinInt32, Valid: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := pgtype.NewMap()
+			plan := m.PlanEncode(pgtype.NumericOID, pgtype.BinaryFormatCode, tt.n)
+			require.NotNil(t, plan)
+
+			buf, err := plan.Encode(tt.n, nil)
+			if !tt.encodeable {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			// The boundary values must still round trip unchanged.
+			var got pgtype.Numeric
+			scanPlan := m.PlanScan(pgtype.NumericOID, pgtype.BinaryFormatCode, &got)
+			require.NotNil(t, scanPlan)
+			require.NoError(t, scanPlan.Scan(buf, &got))
+			require.True(t, isExpectedEqNumeric(tt.n)(got), "got Int=%v Exp=%d", got.Int, got.Exp)
+		})
+	}
+}
+
+func TestNumericBinaryEncodeLargeDigitCount(t *testing.T) {
+	skipCockroachDB(t, "Server does not support the full PostgreSQL numeric range")
+
+	defaultConnTestRunner.RunTest(context.Background(), t, func(ctx context.Context, t testing.TB, conn *pgx.Conn) {
+		for _, want := range []string{
+			strings.Repeat("9", 131068),                                    // 32767 base-10000 digits
+			strings.Repeat("9", 131069),                                    // 32768 base-10000 digits
+			strings.Repeat("9", 131072) + "." + strings.Repeat("9", 16383), // full PostgreSQL range
+		} {
+			var n pgtype.Numeric
+			err := conn.QueryRow(ctx, "select $1::text::numeric", want).Scan(&n)
+			require.NoError(t, err)
+
+			// Encode explicitly: Conn.Query can fall back to text if binary encoding fails.
+			plan := conn.TypeMap().PlanEncode(pgtype.NumericOID, pgtype.BinaryFormatCode, n)
+			require.NotNil(t, plan)
+			buf, err := plan.Encode(n, nil)
+			require.NoError(t, err)
+
+			result := conn.PgConn().ExecParams(ctx, "select $1::numeric::text",
+				[][]byte{buf}, []uint32{pgtype.NumericOID},
+				[]int16{pgtype.BinaryFormatCode}, []int16{pgtype.TextFormatCode}).Read()
+			require.NoError(t, result.Err)
+			require.Len(t, result.Rows, 1)
+			require.Equal(t, want, string(result.Rows[0][0]))
+		}
+	})
+}
+
+func TestNumericFloat64Valuer(t *testing.T) {
+	for i, tt := range []struct {
+		n pgtype.Numeric
+		f pgtype.Float8
+	}{
+		{mustParseNumeric(t, "1"), pgtype.Float8{Float64: 1, Valid: true}},
+		{mustParseNumeric(t, "0.0000000000000000001"), pgtype.Float8{Float64: 0.0000000000000000001, Valid: true}},
+		{mustParseNumeric(t, "-99999999999"), pgtype.Float8{Float64: -99999999999, Valid: true}},
+		{pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true}, pgtype.Float8{Float64: math.Inf(1), Valid: true}},
+		{pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, pgtype.Float8{Float64: math.Inf(-1), Valid: true}},
+		{pgtype.Numeric{Valid: true}, pgtype.Float8{Valid: true}},
+		{pgtype.Numeric{}, pgtype.Float8{}},
+	} {
+		f, err := tt.n.Float64Value()
+		assert.NoErrorf(t, err, "%d", i)
+		assert.Equalf(t, tt.f, f, "%d", i)
+	}
+
+	f, err := pgtype.Numeric{NaN: true, Valid: true}.Float64Value()
+	assert.NoError(t, err)
+	assert.True(t, math.IsNaN(f.Float64))
+	assert.True(t, f.Valid)
+}
+
+func TestNumericInt64Valuer(t *testing.T) {
+	for i, tt := range []struct {
+		n pgtype.Numeric
+		i pgtype.Int8
+	}{
+		{mustParseNumeric(t, "1"), pgtype.Int8{Int64: 1, Valid: true}},
+		{mustParseNumeric(t, "-99999999999"), pgtype.Int8{Int64: -99999999999, Valid: true}},
+		{mustParseNumeric(t, "0"), pgtype.Int8{Int64: 0, Valid: true}},
+		// A valid Numeric with a nil Int is zero, matching Float64Value, Value,
+		// and MarshalJSON. Int64Value used to dereference the nil Int and panic.
+		{pgtype.Numeric{Valid: true}, pgtype.Int8{Int64: 0, Valid: true}},
+		{pgtype.Numeric{}, pgtype.Int8{}},
+	} {
+		v, err := tt.n.Int64Value()
+		assert.NoErrorf(t, err, "%d", i)
+		assert.Equalf(t, tt.i, v, "%d", i)
+	}
+
+	// NaN and infinite values cannot be represented as int64. They also have a
+	// nil Int, but must error rather than convert to zero.
+	for i, n := range []pgtype.Numeric{
+		{NaN: true, Valid: true},
+		{InfinityModifier: pgtype.Infinity, Valid: true},
+		{InfinityModifier: pgtype.NegativeInfinity, Valid: true},
+	} {
+		_, err := n.Int64Value()
+		assert.Errorf(t, err, "%d", i)
+	}
+}
+
+func TestNumericCodecFuzz(t *testing.T) {
+	skipCockroachDB(t, "server formats numeric text format differently")
+
+	r := rand.New(rand.NewPCG(0, 0))
+	max := &big.Int{}
+	max.SetString("9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999", 10)
+
+	tests := make([]pgxtest.ValueRoundTripTest, 0, 2000)
+	for range 10 {
+		for j := -50; j < 50; j++ {
+			byteLen := (max.BitLen() + 7) / 8
+			bytes := make([]byte, byteLen)
+			for k := 0; k < byteLen; {
+				val := r.Uint64()
+				for b := 0; b < 8 && k < byteLen; b++ {
+					bytes[k] = byte(val >> (b * 8))
+					k++
+				}
+			}
+			num := new(big.Int).SetBytes(bytes)
+			num.Mod(num, max)
+
+			n := pgtype.Numeric{Int: num, Exp: int32(j), Valid: true}
+			tests = append(tests, pgxtest.ValueRoundTripTest{Param: n, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(n)})
+
+			negNum := &big.Int{}
+			negNum.Neg(num)
+			n = pgtype.Numeric{Int: negNum, Exp: int32(j), Valid: true}
+			tests = append(tests, pgxtest.ValueRoundTripTest{Param: n, Result: new(pgtype.Numeric), Test: isExpectedEqNumeric(n)})
+		}
+	}
+
+	pgxtest.RunValueRoundTripTests(context.Background(), t, defaultConnTestRunner, nil, "numeric", tests)
+}
+
+func TestNumericMarshalJSON(t *testing.T) {
+	skipCockroachDB(t, "server formats numeric text format differently")
+
+	defaultConnTestRunner.RunTest(context.Background(), t, func(ctx context.Context, t testing.TB, conn *pgx.Conn) {
+		for i, tt := range []struct {
+			decString string
+		}{
+			{"NaN"},
+			{"0"},
+			{"1"},
+			{"-1"},
+			{"1000000000000000000"},
+			{"1234.56789"},
+			{"1.56789"},
+			{"0.00000000000056789"},
+			{"0.00123000"},
+			{"123e-3"},
+			{"243723409723490243842378942378901237502734019231380123e23790"},
+			{"3409823409243892349028349023482934092340892390101e-14021"},
+			{"-1.1"},
+			{"-1.0231"},
+			{"-10.0231"},
+			{"-0.1"},   // failed with "invalid character '.' in numeric literal"
+			{"-0.01"},  // failed with "invalid character '-' after decimal point in numeric literal"
+			{"-0.001"}, // failed with "invalid character '-' after top-level value"
+		} {
+			var num pgtype.Numeric
+			var pgJSON string
+			err := conn.QueryRow(ctx, `select $1::numeric, to_json($1::numeric)`, tt.decString).Scan(&num, &pgJSON)
+			require.NoErrorf(t, err, "%d", i)
+
+			goJSON, err := json.Marshal(num)
+			require.NoErrorf(t, err, "%d", i)
+
+			require.Equal(t, pgJSON, string(goJSON))
+		}
+	})
+}
+
+func TestNumericMarshalJSONInfinity(t *testing.T) {
+	// PostgreSQL renders numeric infinity in JSON as the quoted strings
+	// "Infinity"/"-Infinity" (like to_json('infinity'::numeric)), matching the
+	// existing "NaN" handling. Previously these marshaled to 0, silently
+	// corrupting the value.
+	for _, tt := range []struct {
+		name string
+		num  pgtype.Numeric
+		want string
+	}{
+		{"Infinity", pgtype.Numeric{InfinityModifier: pgtype.Infinity, Valid: true}, `"Infinity"`},
+		{"-Infinity", pgtype.Numeric{InfinityModifier: pgtype.NegativeInfinity, Valid: true}, `"-Infinity"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.num)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, string(got))
+
+			var back pgtype.Numeric
+			require.NoError(t, back.UnmarshalJSON(got))
+			require.Equal(t, tt.num, back)
+		})
+	}
+}
+
+func TestNumericUnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    *pgtype.Numeric
+		src     []byte
+		wantErr bool
+	}{
+		{
+			name:    "null",
+			want:    &pgtype.Numeric{},
+			src:     []byte(`null`),
+			wantErr: false,
+		},
+		{
+			name:    "NaN",
+			want:    &pgtype.Numeric{Valid: true, NaN: true},
+			src:     []byte(`"NaN"`),
+			wantErr: false,
+		},
+		{
+			name:    "Infinity",
+			want:    &pgtype.Numeric{Valid: true, InfinityModifier: pgtype.Infinity},
+			src:     []byte(`"Infinity"`),
+			wantErr: false,
+		},
+		{
+			name:    "-Infinity",
+			want:    &pgtype.Numeric{Valid: true, InfinityModifier: pgtype.NegativeInfinity},
+			src:     []byte(`"-Infinity"`),
+			wantErr: false,
+		},
+		{
+			name:    "0",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(0)},
+			src:     []byte("0"),
+			wantErr: false,
+		},
+		{
+			name:    "1",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(1)},
+			src:     []byte("1"),
+			wantErr: false,
+		},
+		{
+			name:    "-1",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(-1)},
+			src:     []byte("-1"),
+			wantErr: false,
+		},
+		{
+			name:    "bigInt",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(1), Exp: 30},
+			src:     []byte("1000000000000000000000000000000"),
+			wantErr: false,
+		},
+		{
+			name:    "float: 1234.56789",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(123456789), Exp: -5},
+			src:     []byte("1234.56789"),
+			wantErr: false,
+		},
+		{
+			name:    "scientific: 1e10",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(1), Exp: 10},
+			src:     []byte("1e10"),
+			wantErr: false,
+		},
+		{
+			name:    "scientific: 1.000101231014e10",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(1000101231014), Exp: -2},
+			src:     []byte("1.000101231014e10"),
+			wantErr: false,
+		},
+		{
+			name:    "scientific: what encoding/json emits for float64(1e21)",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(1), Exp: 21},
+			src:     []byte("1e+21"),
+			wantErr: false,
+		},
+		{
+			name:    "scientific: negative exponent",
+			want:    &pgtype.Numeric{Valid: true, Int: big.NewInt(-15), Exp: -4},
+			src:     []byte("-1.5e-3"),
+			wantErr: false,
+		},
+		{
+			name: "scientific: beyond float64 precision",
+			want: &pgtype.Numeric{
+				Valid: true,
+				Int:   mustParseBigInt(t, "1234567890123456789"),
+				Exp:   -13,
+			},
+			src:     []byte("1.234567890123456789e5"),
+			wantErr: false,
+		},
+		{
+			name:    "invalid value",
+			want:    &pgtype.Numeric{},
+			src:     []byte("0xffff"),
+			wantErr: true,
+		},
+		{
+			name:    "invalid exponent",
+			want:    &pgtype.Numeric{},
+			src:     []byte("1e1.5"),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := &pgtype.Numeric{}
+			if err := got.UnmarshalJSON(tt.src); (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("UnmarshalJSON() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

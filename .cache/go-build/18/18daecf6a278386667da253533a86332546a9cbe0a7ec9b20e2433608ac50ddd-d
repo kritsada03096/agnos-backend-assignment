@@ -1,0 +1,86 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\database\database.go:1:1
+package database
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"agnos-backend-assignment/migrations"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {goCover_62223191ec62__0[0] = 7 ; goCover_62223191ec62__0[1] = goCover_62223191ec62_P ; goCover_62223191ec62__0[2] = 0 ; goCover_62223191ec62__0[3] = 1;
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {goCover_62223191ec62__0[7] = 1;
+		return nil, fmt.Errorf("invalid DATABASE_URL")
+	}
+	goCover_62223191ec62__0[4] = 1;cfg.MaxConns = 10
+	cfg.MinConns = 1
+	cfg.MaxConnLifetime = time.Hour
+	p, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {goCover_62223191ec62__0[8] = 1;
+		return nil, err
+	}
+	goCover_62223191ec62__0[5] = 1;if err = p.Ping(ctx); err != nil {goCover_62223191ec62__0[9] = 1;
+		p.Close()
+		return nil, err
+	}
+	goCover_62223191ec62__0[6] = 1;return p, nil
+}
+func Migrate(ctx context.Context, p *pgxpool.Pool) error {goCover_62223191ec62__1[0] = 22 ; goCover_62223191ec62__1[1] = goCover_62223191ec62_P ; goCover_62223191ec62__1[2] = 1 ; goCover_62223191ec62__1[3] = 1;
+	tx, err := p.Begin(ctx)
+	if err != nil {goCover_62223191ec62__1[10] = 1;
+		return err
+	}
+	goCover_62223191ec62__1[4] = 1;defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(2026092801)"); err != nil {goCover_62223191ec62__1[11] = 1;
+		return err
+	}
+	goCover_62223191ec62__1[5] = 1;if _, err = tx.Exec(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"); err != nil {goCover_62223191ec62__1[12] = 1;
+		return err
+	}
+	goCover_62223191ec62__1[6] = 1;entries, err := migrations.Files.ReadDir(".")
+	if err != nil {goCover_62223191ec62__1[13] = 1;
+		return err
+	}
+	goCover_62223191ec62__1[7] = 1;sort.Slice(entries, func(i, j int) bool {goCover_62223191ec62__1[14] = 1; return entries[i].Name() < entries[j].Name() })
+	goCover_62223191ec62__1[8] = 1;for _, entry := range entries {goCover_62223191ec62__1[15] = 1;
+		var exists bool
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", entry.Name()).Scan(&exists); err != nil {goCover_62223191ec62__1[20] = 1;
+			return err
+		}
+		goCover_62223191ec62__1[16] = 1;if exists {goCover_62223191ec62__1[21] = 1;
+			continue
+		}
+		goCover_62223191ec62__1[17] = 1;body, err := migrations.Files.ReadFile(entry.Name())
+		if err != nil {goCover_62223191ec62__1[22] = 1;
+			return err
+		}
+		goCover_62223191ec62__1[18] = 1;if _, err = tx.Exec(ctx, string(body)); err != nil {goCover_62223191ec62__1[23] = 1;
+			return fmt.Errorf("migration %s: %w", entry.Name(), err)
+		}
+		goCover_62223191ec62__1[19] = 1;if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES($1)", entry.Name()); err != nil {goCover_62223191ec62__1[24] = 1;
+			return err
+		}
+	}
+	goCover_62223191ec62__1[9] = 1;return tx.Commit(ctx)
+}
+
+// Seed only registers hospitals. Patient records are imported through the HIS client.
+func Seed(ctx context.Context, p *pgxpool.Pool, aURL, bURL string) error {goCover_62223191ec62__2[0] = 6 ; goCover_62223191ec62__2[1] = goCover_62223191ec62_P ; goCover_62223191ec62__2[2] = 2 ; goCover_62223191ec62__2[3] = 1;
+	tx, err := p.Begin(ctx)
+	if err != nil {goCover_62223191ec62__2[6] = 1;
+		return err
+	}
+	goCover_62223191ec62__2[4] = 1;defer tx.Rollback(context.Background())
+	for _, h := range []struct{ code, name, url string }{{"hospital-a", "Hospital A", aURL}, {"hospital-b", "Hospital B (demo)", bURL}} {goCover_62223191ec62__2[7] = 1;
+		_, err = tx.Exec(ctx, `INSERT INTO hospitals(code,name,api_url) VALUES($1,$2,$3)
+		ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,api_url=EXCLUDED.api_url,updated_at=now()`, h.code, h.name, h.url)
+		if err != nil {goCover_62223191ec62__2[8] = 1;
+			return err
+		}
+	}
+	goCover_62223191ec62__2[5] = 1;return tx.Commit(ctx)
+}

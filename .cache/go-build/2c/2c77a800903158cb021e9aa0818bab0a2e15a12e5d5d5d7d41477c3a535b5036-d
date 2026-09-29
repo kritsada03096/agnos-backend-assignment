@@ -1,0 +1,69 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\client\hospital.go:1:1
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"agnos-backend-assignment/internal/model"
+)
+
+type Hospital struct{ http *http.Client }
+
+func New(timeout time.Duration) *Hospital {goCover_7cf278ce6897__0[0] = 2 ; goCover_7cf278ce6897__0[1] = goCover_7cf278ce6897_P ; goCover_7cf278ce6897__0[2] = 0 ; goCover_7cf278ce6897__0[3] = 1;
+	return &Hospital{&http.Client{Timeout: timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {goCover_7cf278ce6897__0[4] = 1; return http.ErrUseLastResponse }}}
+}
+func (h *Hospital) Search(ctx context.Context, baseURL, id string) (model.Patient, error) {goCover_7cf278ce6897__1[0] = 23 ; goCover_7cf278ce6897__1[1] = goCover_7cf278ce6897_P ; goCover_7cf278ce6897__1[2] = 1 ; goCover_7cf278ce6897__1[3] = 1;
+	var p model.Patient
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {goCover_7cf278ce6897__1[13] = 1;
+		return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[4] = 1;endpoint := strings.TrimRight(baseURL, "/") + "/patient/search/" + url.PathEscape(id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {goCover_7cf278ce6897__1[14] = 1;
+		return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[5] = 1;req.Header.Set("Accept", "application/json")
+	resp, err := h.http.Do(req)
+	if err != nil {goCover_7cf278ce6897__1[15] = 1;
+		var ne net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {goCover_7cf278ce6897__1[17] = 1;
+			return p, model.ErrTimeout
+		}
+		goCover_7cf278ce6897__1[16] = 1;return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[6] = 1;defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {goCover_7cf278ce6897__1[18] = 1;
+		return p, model.ErrNotFound
+	}
+	goCover_7cf278ce6897__1[7] = 1;if resp.StatusCode != http.StatusOK {goCover_7cf278ce6897__1[19] = 1;
+		return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[8] = 1;const maxBody = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil || len(body) > maxBody || json.Unmarshal(body, &p) != nil || strings.TrimSpace(p.PatientHN) == "" || len(p.PatientHN) > 100 {goCover_7cf278ce6897__1[20] = 1;
+		return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[9] = 1;for _, value := range []*string{p.NationalID, p.PassportID, p.FirstNameTH, p.MiddleNameTH, p.LastNameTH, p.FirstNameEN, p.MiddleNameEN, p.LastNameEN, p.PhoneNumber, p.Email} {goCover_7cf278ce6897__1[21] = 1;
+		if value != nil && len(*value) > 254 {goCover_7cf278ce6897__1[22] = 1;
+			return p, model.ErrUpstream
+		}
+	}
+	goCover_7cf278ce6897__1[10] = 1;if p.DateOfBirth != nil {goCover_7cf278ce6897__1[23] = 1;
+		if _, err := time.Parse("2006-01-02", *p.DateOfBirth); err != nil {goCover_7cf278ce6897__1[24] = 1;
+			return p, model.ErrUpstream
+		}
+	}
+	goCover_7cf278ce6897__1[11] = 1;if p.Gender != nil && *p.Gender != "M" && *p.Gender != "F" {goCover_7cf278ce6897__1[25] = 1;
+		return p, model.ErrUpstream
+	}
+	goCover_7cf278ce6897__1[12] = 1;return p, nil
+}

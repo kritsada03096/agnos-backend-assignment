@@ -1,0 +1,10 @@
+./auth_oauth.go
+./auth_scram.go
+./config.go
+./defaults_windows.go
+./doc.go
+./errors.go
+./krb5.go
+./parse_url.go
+./pgconn.go
+./require_auth.go

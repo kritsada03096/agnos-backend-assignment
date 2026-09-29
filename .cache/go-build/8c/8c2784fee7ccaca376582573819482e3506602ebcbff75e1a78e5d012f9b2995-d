@@ -1,0 +1,42 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\auth\token.go:1:1
+package auth
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+
+	"agnos-backend-assignment/internal/model"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+type Claims struct {
+	StaffID    int64  `json:"staff_id"`
+	HospitalID int64  `json:"hospital_id"`
+	Username   string `json:"username"`
+	jwt.RegisteredClaims
+}
+
+type Tokens struct {
+	secret []byte
+	ttl    time.Duration
+}
+
+func New(secret string, ttl time.Duration) *Tokens {goCover_600abc321bc5__0[0] = 1 ; goCover_600abc321bc5__0[1] = goCover_600abc321bc5_P ; goCover_600abc321bc5__0[2] = 0 ; goCover_600abc321bc5__0[3] = 1; return &Tokens{[]byte(secret), ttl} }
+func (t *Tokens) Issue(s model.Staff) (string, error) {goCover_600abc321bc5__1[0] = 2 ; goCover_600abc321bc5__1[1] = goCover_600abc321bc5_P ; goCover_600abc321bc5__1[2] = 1 ; goCover_600abc321bc5__1[3] = 1;
+	now := time.Now()
+	c := Claims{s.ID, s.HospitalID, s.Username, jwt.RegisteredClaims{
+		Issuer: "agnos", Audience: jwt.ClaimStrings{"agnos-api"}, Subject: strconv.FormatInt(s.ID, 10),
+		IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(t.ttl)),
+	}}
+	goCover_600abc321bc5__1[4] = 1;return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString(t.secret)
+}
+func (t *Tokens) Parse(raw string) (*Claims, error) {goCover_600abc321bc5__2[0] = 5 ; goCover_600abc321bc5__2[1] = goCover_600abc321bc5_P ; goCover_600abc321bc5__2[2] = 2 ; goCover_600abc321bc5__2[3] = 1;
+	c := new(Claims)
+	token, err := jwt.ParseWithClaims(raw, c, func(_ *jwt.Token) (any, error) {goCover_600abc321bc5__2[6] = 1; return t.secret, nil },
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("agnos"), jwt.WithAudience("agnos-api"), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
+	goCover_600abc321bc5__2[4] = 1;if err != nil || !token.Valid || c.StaffID <= 0 || c.HospitalID <= 0 || c.Subject != strconv.FormatInt(c.StaffID, 10) {goCover_600abc321bc5__2[7] = 1;
+		return nil, fmt.Errorf("invalid access token")
+	}
+	goCover_600abc321bc5__2[5] = 1;return c, nil
+}

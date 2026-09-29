@@ -1,0 +1,39 @@
+# The devcontainer is a thin Linux shell around the same development environment used natively.
+# It defines no database services of its own: this checkout runs its own PostgreSQL clusters and
+# CockroachDB node under .dev, supervised by process-compose, exactly as on macOS. See
+# DEVELOPMENT.md.
+#
+# Connection settings come entirely from the checkout-local .dev/*.env files that mise loads.
+# Keeping them there rather than layering container-only defaults on top is what makes this
+# container and a native checkout use one identical environment.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    volumes:
+      - ..:/workspaces/pgx:cached
+      # devstate-local also holds this checkout's database clusters and their socket directory
+      # (PGX_DEV_RUNTIME_DIR in devcontainer.json). They are the one part of .dev/ that cannot live
+      # on the bind mount above: initdb and Unix sockets do not work reliably on Docker Desktop's
+      # macOS/Windows file sharing, which is why the per-version PostgreSQL containers this
+      # replaced used named volumes for their data and socket directories too.
+      - devstate-local:/persist/local
+      - devstate-shared:/persist/shared
+
+    # Overrides default command so things don't shut down after the process ends.
+    command: sleep infinity
+
+volumes:
+  # Per-container persistence. Compose prefixes this with COMPOSE_PROJECT_NAME, which the VS Code
+  # dev-containers extension derives per-instance, so each devcontainer gets its own.
+  devstate-local:
+
+  # Shared across every devcontainer instance of this project. Pre-created in devcontainer.json's
+  # initializeCommand so the exact name is used as-is (Compose would otherwise prefix it
+  # per-instance, defeating the purpose).
+  devstate-shared:
+    name: devstate-shared-pgx
+    external: true

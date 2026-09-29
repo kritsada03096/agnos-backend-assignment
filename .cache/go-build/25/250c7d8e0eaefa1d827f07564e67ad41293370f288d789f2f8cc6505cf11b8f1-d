@@ -1,0 +1,140 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\service\service.go:1:1
+package service
+
+import (
+	"context"
+	"errors"
+
+	"agnos-backend-assignment/internal/auth"
+	"agnos-backend-assignment/internal/model"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type Store interface {
+	HospitalByCode(context.Context, string) (model.Hospital, error)
+	HospitalByID(context.Context, int64) (model.Hospital, error)
+	CreateStaff(context.Context, model.Staff) (model.Staff, error)
+	StaffByUsername(context.Context, int64, string) (model.Staff, error)
+	StaffByID(context.Context, int64) (model.Staff, error)
+	SearchPatients(context.Context, int64, model.Filter) ([]model.Patient, error)
+	UpsertPatient(context.Context, model.Patient) error
+}
+type HospitalClient interface {
+	Search(context.Context, string, string) (model.Patient, error)
+}
+type Service struct {
+	Store     Store
+	HIS       HospitalClient
+	Tokens    *auth.Tokens
+	dummyHash []byte
+}
+
+func New(store Store, his HospitalClient, tokens *auth.Tokens) *Service {goCover_f29a526d26e2__0[0] = 1 ; goCover_f29a526d26e2__0[1] = goCover_f29a526d26e2_P ; goCover_f29a526d26e2__0[2] = 0 ; goCover_f29a526d26e2__0[3] = 1;
+	hash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-login-timing"), bcrypt.DefaultCost)
+	return &Service{store, his, tokens, hash}
+}
+func (s *Service) CreateStaff(ctx context.Context, username, password, hospital string) (model.Staff, error) {goCover_f29a526d26e2__1[0] = 5 ; goCover_f29a526d26e2__1[1] = goCover_f29a526d26e2_P ; goCover_f29a526d26e2__1[2] = 1 ; goCover_f29a526d26e2__1[3] = 1;
+	h, err := s.Store.HospitalByCode(ctx, hospital)
+	if err != nil {goCover_f29a526d26e2__1[6] = 1;
+		return model.Staff{}, err
+	}
+	goCover_f29a526d26e2__1[4] = 1;hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {goCover_f29a526d26e2__1[7] = 1;
+		return model.Staff{}, err
+	}
+	goCover_f29a526d26e2__1[5] = 1;return s.Store.CreateStaff(ctx, model.Staff{HospitalID: h.ID, Username: username, PasswordHash: string(hash)})
+}
+func (s *Service) Login(ctx context.Context, username, password, hospital string) (string, error) {goCover_f29a526d26e2__2[0] = 11 ; goCover_f29a526d26e2__2[1] = goCover_f29a526d26e2_P ; goCover_f29a526d26e2__2[2] = 2 ; goCover_f29a526d26e2__2[3] = 1;
+	h, err := s.Store.HospitalByCode(ctx, hospital)
+	if err != nil {goCover_f29a526d26e2__2[7] = 1;
+		if errors.Is(err, model.ErrNotFound) {goCover_f29a526d26e2__2[9] = 1;
+			_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
+			return "", model.ErrUnauthorized
+		}
+		goCover_f29a526d26e2__2[8] = 1;return "", err
+	}
+	goCover_f29a526d26e2__2[4] = 1;staff, err := s.Store.StaffByUsername(ctx, h.ID, username)
+	if err != nil {goCover_f29a526d26e2__2[10] = 1;
+		if errors.Is(err, model.ErrNotFound) {goCover_f29a526d26e2__2[12] = 1;
+			_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
+			return "", model.ErrUnauthorized
+		}
+		goCover_f29a526d26e2__2[11] = 1;return "", err
+	}
+	goCover_f29a526d26e2__2[5] = 1;if bcrypt.CompareHashAndPassword([]byte(staff.PasswordHash), []byte(password)) != nil {goCover_f29a526d26e2__2[13] = 1;
+		return "", model.ErrUnauthorized
+	}
+	goCover_f29a526d26e2__2[6] = 1;return s.Tokens.Issue(staff)
+}
+func (s *Service) Authenticate(ctx context.Context, raw string) (*auth.Claims, error) {goCover_f29a526d26e2__3[0] = 9 ; goCover_f29a526d26e2__3[1] = goCover_f29a526d26e2_P ; goCover_f29a526d26e2__3[2] = 3 ; goCover_f29a526d26e2__3[3] = 1;
+	c, err := s.Tokens.Parse(raw)
+	if err != nil {goCover_f29a526d26e2__3[8] = 1;
+		return nil, model.ErrUnauthorized
+	}
+	goCover_f29a526d26e2__3[4] = 1;staff, err := s.Store.StaffByID(ctx, c.StaffID)
+	if errors.Is(err, model.ErrNotFound) {goCover_f29a526d26e2__3[9] = 1;
+		return nil, model.ErrUnauthorized
+	}
+	goCover_f29a526d26e2__3[5] = 1;if err != nil {goCover_f29a526d26e2__3[10] = 1;
+		return nil, err
+	}
+	goCover_f29a526d26e2__3[6] = 1;if staff.HospitalID != c.HospitalID || staff.Username != c.Username {goCover_f29a526d26e2__3[11] = 1;
+		return nil, model.ErrUnauthorized
+	}
+	goCover_f29a526d26e2__3[7] = 1;return c, nil
+}
+
+func (s *Service) Search(ctx context.Context, hospitalID int64, f model.Filter) (model.SearchResult, error) {goCover_f29a526d26e2__4[0] = 25 ; goCover_f29a526d26e2__4[1] = goCover_f29a526d26e2_P ; goCover_f29a526d26e2__4[2] = 4 ; goCover_f29a526d26e2__4[3] = 1;
+	result := model.SearchResult{Patients: []model.Patient{}, Page: f.Page, Limit: f.Limit}
+	patients, err := s.Store.SearchPatients(ctx, hospitalID, f)
+	if err != nil {goCover_f29a526d26e2__4[16] = 1;
+		return result, err
+	}
+	goCover_f29a526d26e2__4[4] = 1;result.Patients = patients
+	if len(patients) > 0 {goCover_f29a526d26e2__4[17] = 1;
+		return result, nil
+	}
+	goCover_f29a526d26e2__4[5] = 1;id := f.NationalID
+	if id == "" {goCover_f29a526d26e2__4[18] = 1;
+		id = f.PassportID
+	}
+	goCover_f29a526d26e2__4[6] = 1;if id == "" {goCover_f29a526d26e2__4[19] = 1;
+		return result, nil
+	}
+	// A miss on a later page or another filter must not refresh an existing identifier.
+	goCover_f29a526d26e2__4[7] = 1;identity := model.Filter{NationalID: f.NationalID, PassportID: f.PassportID, Page: 1, Limit: 1}
+	existing, err := s.Store.SearchPatients(ctx, hospitalID, identity)
+	if err != nil {goCover_f29a526d26e2__4[20] = 1;
+		return result, err
+	}
+	goCover_f29a526d26e2__4[8] = 1;if len(existing) > 0 {goCover_f29a526d26e2__4[21] = 1;
+		return result, nil
+	}
+	goCover_f29a526d26e2__4[9] = 1;h, err := s.Store.HospitalByID(ctx, hospitalID)
+	if err != nil {goCover_f29a526d26e2__4[22] = 1;
+		return result, err
+	}
+	goCover_f29a526d26e2__4[10] = 1;if h.APIURL == "" {goCover_f29a526d26e2__4[23] = 1;
+		return result, model.ErrUpstream
+	}
+	goCover_f29a526d26e2__4[11] = 1;p, err := s.HIS.Search(ctx, h.APIURL, id)
+	if errors.Is(err, model.ErrNotFound) {goCover_f29a526d26e2__4[24] = 1;
+		return result, nil
+	}
+	goCover_f29a526d26e2__4[12] = 1;if err != nil {goCover_f29a526d26e2__4[25] = 1;
+		return result, err
+	}
+	// Never trust an upstream hospital_id or identifier that differs from the lookup.
+	goCover_f29a526d26e2__4[13] = 1;if (f.NationalID != "" && (p.NationalID == nil || *p.NationalID != f.NationalID)) ||
+		(f.PassportID != "" && (p.PassportID == nil || *p.PassportID != f.PassportID)) {goCover_f29a526d26e2__4[26] = 1;
+		return result, model.ErrUpstream
+	}
+	goCover_f29a526d26e2__4[14] = 1;p.ID = 0
+	p.HospitalID = hospitalID
+	if err := s.Store.UpsertPatient(ctx, p); err != nil {goCover_f29a526d26e2__4[27] = 1;
+		return result, err
+	}
+	// Reapply ALL filters and pagination using the same database semantics.
+	goCover_f29a526d26e2__4[15] = 1;result.Patients, err = s.Store.SearchPatients(ctx, hospitalID, f)
+	return result, err
+}

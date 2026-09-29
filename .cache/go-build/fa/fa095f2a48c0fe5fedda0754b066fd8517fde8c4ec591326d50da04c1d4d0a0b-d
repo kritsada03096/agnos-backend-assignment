@@ -1,0 +1,55 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\middleware\auth.go:1:1
+package middleware
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"errors"
+	"net/http"
+	"strings"
+
+	"agnos-backend-assignment/internal/auth"
+	"agnos-backend-assignment/internal/model"
+	"github.com/gin-gonic/gin"
+)
+
+type Authenticator interface {
+	Authenticate(context.Context, string) (*auth.Claims, error)
+}
+
+func RequireAuth(a Authenticator) gin.HandlerFunc {goCover_6a21cd130bbf__0[0] = 9 ; goCover_6a21cd130bbf__0[1] = goCover_6a21cd130bbf_P ; goCover_6a21cd130bbf__0[2] = 0 ; goCover_6a21cd130bbf__0[3] = 1;
+	return func(c *gin.Context) {goCover_6a21cd130bbf__0[4] = 1;
+		parts := strings.Fields(c.GetHeader("Authorization"))
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {goCover_6a21cd130bbf__0[7] = 1;
+			reject(c, 401, "authentication required")
+			return
+		}
+		goCover_6a21cd130bbf__0[5] = 1;claims, err := a.Authenticate(c.Request.Context(), parts[1])
+		if err != nil {goCover_6a21cd130bbf__0[8] = 1;
+			if errors.Is(err, model.ErrUnauthorized) {goCover_6a21cd130bbf__0[10] = 1;
+				reject(c, 401, "invalid or expired token")
+			} else{ goCover_6a21cd130bbf__0[11] = 1;{
+				reject(c, 500, "internal server error")
+			}}
+			goCover_6a21cd130bbf__0[9] = 1;return
+		}
+		goCover_6a21cd130bbf__0[6] = 1;c.Set("hospital_id", claims.HospitalID)
+		c.Set("staff_id", claims.StaffID)
+		c.Next()
+	}
+}
+func RequireProvisioningKey(key string) gin.HandlerFunc {goCover_6a21cd130bbf__1[0] = 4 ; goCover_6a21cd130bbf__1[1] = goCover_6a21cd130bbf_P ; goCover_6a21cd130bbf__1[2] = 1 ; goCover_6a21cd130bbf__1[3] = 1;
+	expected := sha256.Sum256([]byte(key))
+	return func(c *gin.Context) {goCover_6a21cd130bbf__1[4] = 1;
+		actual := sha256.Sum256([]byte(c.GetHeader("X-Provisioning-Key")))
+		if key == "" || subtle.ConstantTimeCompare(actual[:], expected[:]) != 1 {goCover_6a21cd130bbf__1[6] = 1;
+			reject(c, http.StatusForbidden, "staff provisioning key required")
+			return
+		}
+		goCover_6a21cd130bbf__1[5] = 1;c.Next()
+	}
+}
+func reject(c *gin.Context, status int, message string) {goCover_6a21cd130bbf__2[0] = 1 ; goCover_6a21cd130bbf__2[1] = goCover_6a21cd130bbf_P ; goCover_6a21cd130bbf__2[2] = 2 ; goCover_6a21cd130bbf__2[3] = 1;
+	c.AbortWithStatusJSON(status, gin.H{"success": false, "message": message})
+}

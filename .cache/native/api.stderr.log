@@ -1,0 +1,18 @@
+2026/09/28 18:41:52 INFO HTTP server starting address=127.0.0.1:8080
+2026/09/28 18:41:52 INFO request method=GET route=/health/ready status=200 duration=534.3µs
+2026/09/28 18:42:19 INFO request method=POST route=/staff/create status=201 duration=117.4313ms
+2026/09/28 18:42:19 INFO request method=POST route=/staff/login status=200 duration=86.2722ms
+2026/09/28 18:42:19 INFO request method=POST route=/staff/create status=201 duration=250.9541ms
+2026/09/28 18:42:19 INFO request method=POST route=/staff/login status=200 duration=77.5358ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=17.4374ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=2.0233ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=2.0113ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=3.4038ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=1.0811ms
+2026/09/28 18:42:20 INFO request method=GET route=/patient/search status=200 duration=1.0294ms
+2026/09/28 18:42:51 INFO request method=GET route=/health/ready status=200 duration=0s
+2026/09/28 18:45:37 INFO request method=GET route=/health/ready status=200 duration=510.8µs
+2026/09/28 18:45:38 INFO request method=GET route=/health/ready status=200 duration=318.8µs
+2026/09/28 19:35:31 INFO request method=GET route=/health/ready status=200 duration=0s
+2026/09/28 20:17:41 INFO request method=GET route=/health/ready status=200 duration=553.1µs
+2026/09/28 20:17:41 INFO request method=GET route="" status=404 duration=0s

@@ -1,0 +1,42 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\config\config.go:1:1
+package config
+
+import (
+	"fmt"
+	"os"
+	"time"
+)
+
+type Config struct {
+	Address, DatabaseURL, JWTSecret, ProvisioningKey string
+	TokenTTL, HISTimeout                             time.Duration
+}
+
+func Load() (Config, error) {goCover_4d1c3480e278__0[0] = 16 ; goCover_4d1c3480e278__0[1] = goCover_4d1c3480e278_P ; goCover_4d1c3480e278__0[2] = 0 ; goCover_4d1c3480e278__0[3] = 1;
+	c := Config{Address: ":8080", DatabaseURL: os.Getenv("DATABASE_URL"), JWTSecret: os.Getenv("JWT_SECRET"), ProvisioningKey: os.Getenv("STAFF_PROVISIONING_KEY"), TokenTTL: time.Hour, HISTimeout: 5 * time.Second}
+	if v := os.Getenv("HTTP_ADDR"); v != "" {goCover_4d1c3480e278__0[10] = 1;
+		c.Address = v
+	}
+	goCover_4d1c3480e278__0[4] = 1;if c.DatabaseURL == "" {goCover_4d1c3480e278__0[11] = 1;
+		return c, fmt.Errorf("DATABASE_URL is required")
+	}
+	goCover_4d1c3480e278__0[5] = 1;if len(c.JWTSecret) < 32 {goCover_4d1c3480e278__0[12] = 1;
+		return c, fmt.Errorf("JWT_SECRET must be at least 32 bytes")
+	}
+	goCover_4d1c3480e278__0[6] = 1;if len(c.ProvisioningKey) < 32 {goCover_4d1c3480e278__0[13] = 1;
+		return c, fmt.Errorf("STAFF_PROVISIONING_KEY must be at least 32 bytes")
+	}
+	goCover_4d1c3480e278__0[7] = 1;for name, target := range map[string]*time.Duration{"JWT_TTL": &c.TokenTTL, "HIS_TIMEOUT": &c.HISTimeout} {goCover_4d1c3480e278__0[14] = 1;
+		if value := os.Getenv(name); value != "" {goCover_4d1c3480e278__0[15] = 1;
+			d, err := time.ParseDuration(value)
+			if err != nil || d <= 0 {goCover_4d1c3480e278__0[17] = 1;
+				return c, fmt.Errorf("%s must be a positive duration", name)
+			}
+			goCover_4d1c3480e278__0[16] = 1;*target = d
+		}
+	}
+	goCover_4d1c3480e278__0[8] = 1;if c.TokenTTL > 24*time.Hour || c.HISTimeout > 15*time.Second {goCover_4d1c3480e278__0[18] = 1;
+		return c, fmt.Errorf("JWT_TTL must be <=24h and HIS_TIMEOUT <=15s")
+	}
+	goCover_4d1c3480e278__0[9] = 1;return c, nil
+}

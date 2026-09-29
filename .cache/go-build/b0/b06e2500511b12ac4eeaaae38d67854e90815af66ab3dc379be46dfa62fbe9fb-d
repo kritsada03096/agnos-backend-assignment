@@ -1,0 +1,205 @@
+//line C:\Users\krits\agnos-backend-assignment\internal\handler\http.go:1:1
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"mime"
+	"net/http"
+	"net/mail"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"agnos-backend-assignment/internal/middleware"
+	"agnos-backend-assignment/internal/model"
+	"agnos-backend-assignment/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+type Handler struct{ service *service.Service }
+
+func Router(s *service.Service, key string, ping func(context.Context) error) *gin.Engine {goCover_e1ca1b934b6a__0[0] = 17 ; goCover_e1ca1b934b6a__0[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__0[2] = 0 ; goCover_e1ca1b934b6a__0[3] = 1;
+	r := gin.New()
+	// Gin's default recovery logger dumps request headers and URLs on panic.
+	// Suppress that dump because it can contain provisioning keys or patient IDs.
+	goCover_e1ca1b934b6a__0[4] = 1;r.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {goCover_e1ca1b934b6a__0[11] = 1;
+		slog.Error("request panic", "route", c.FullPath())
+		c.AbortWithStatusJSON(500, gin.H{"success": false, "message": "internal server error"})
+	}))
+	goCover_e1ca1b934b6a__0[5] = 1;r.Use(func(c *gin.Context) {goCover_e1ca1b934b6a__0[12] = 1;
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Header("Cache-Control", "no-store")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+		// Only log route templates; query strings contain patient identifiers.
+		goCover_e1ca1b934b6a__0[13] = 1;slog.Info("request", "method", c.Request.Method, "route", c.FullPath(), "status", c.Writer.Status(), "duration", time.Since(start))
+	})
+	goCover_e1ca1b934b6a__0[6] = 1;_ = r.SetTrustedProxies(nil)
+	h := Handler{s}
+	r.GET("/health/live", func(c *gin.Context) {goCover_e1ca1b934b6a__0[14] = 1; c.JSON(200, gin.H{"success": true}) })
+	goCover_e1ca1b934b6a__0[7] = 1;r.GET("/health/ready", func(c *gin.Context) {goCover_e1ca1b934b6a__0[15] = 1;
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if err := ping(ctx); err != nil {goCover_e1ca1b934b6a__0[17] = 1;
+			fail(c, 503, "database unavailable")
+			return
+		}
+		goCover_e1ca1b934b6a__0[16] = 1;c.JSON(200, gin.H{"success": true})
+	})
+	goCover_e1ca1b934b6a__0[8] = 1;r.POST("/staff/create", middleware.RequireProvisioningKey(key), h.create)
+	r.POST("/staff/login", h.login)
+	r.GET("/patient/search", middleware.RequireAuth(s), h.search)
+	r.NoRoute(func(c *gin.Context) {goCover_e1ca1b934b6a__0[18] = 1; fail(c, 404, "route not found") })
+	goCover_e1ca1b934b6a__0[9] = 1;r.HandleMethodNotAllowed = true
+	r.NoMethod(func(c *gin.Context) {goCover_e1ca1b934b6a__0[19] = 1; fail(c, 405, "method not allowed") })
+	goCover_e1ca1b934b6a__0[10] = 1;return r
+}
+
+type credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Hospital string `json:"hospital"`
+}
+
+var accountPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+func readCredentials(c *gin.Context, create bool) (credentials, bool) {goCover_e1ca1b934b6a__1[0] = 9 ; goCover_e1ca1b934b6a__1[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__1[2] = 1 ; goCover_e1ca1b934b6a__1[3] = 1;
+	var v credentials
+	media, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || media != "application/json" {goCover_e1ca1b934b6a__1[8] = 1;
+		fail(c, 415, "Content-Type must be application/json")
+		return v, false
+	}
+	goCover_e1ca1b934b6a__1[4] = 1;c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8192)
+	d := json.NewDecoder(c.Request.Body)
+	d.DisallowUnknownFields()
+	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF {goCover_e1ca1b934b6a__1[9] = 1;
+		fail(c, 400, "invalid JSON body")
+		return v, false
+	}
+	goCover_e1ca1b934b6a__1[5] = 1;min := 1
+	if create {goCover_e1ca1b934b6a__1[10] = 1;
+		min = 8
+	}
+	goCover_e1ca1b934b6a__1[6] = 1;if !accountPattern.MatchString(v.Username) || !accountPattern.MatchString(v.Hospital) || len(v.Password) < min || len(v.Password) > 72 {goCover_e1ca1b934b6a__1[11] = 1;
+		fail(c, 400, "invalid credentials: username/hospital must be 1-64 allowed characters; password must be 8-72 bytes on creation")
+		return v, false
+	}
+	goCover_e1ca1b934b6a__1[7] = 1;return v, true
+}
+func (h Handler) create(c *gin.Context) {goCover_e1ca1b934b6a__2[0] = 5 ; goCover_e1ca1b934b6a__2[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__2[2] = 2 ; goCover_e1ca1b934b6a__2[3] = 1;
+	v, ok := readCredentials(c, true)
+	if !ok {goCover_e1ca1b934b6a__2[6] = 1;
+		return
+	}
+	goCover_e1ca1b934b6a__2[4] = 1;s, err := h.service.CreateStaff(c.Request.Context(), v.Username, v.Password, v.Hospital)
+	if err != nil {goCover_e1ca1b934b6a__2[7] = 1;
+		respondError(c, err)
+		return
+	}
+	goCover_e1ca1b934b6a__2[5] = 1;c.JSON(201, gin.H{"success": true, "data": s})
+}
+func (h Handler) login(c *gin.Context) {goCover_e1ca1b934b6a__3[0] = 5 ; goCover_e1ca1b934b6a__3[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__3[2] = 3 ; goCover_e1ca1b934b6a__3[3] = 1;
+	v, ok := readCredentials(c, false)
+	if !ok {goCover_e1ca1b934b6a__3[6] = 1;
+		return
+	}
+	goCover_e1ca1b934b6a__3[4] = 1;token, err := h.service.Login(c.Request.Context(), v.Username, v.Password, v.Hospital)
+	if err != nil {goCover_e1ca1b934b6a__3[7] = 1;
+		respondError(c, err)
+		return
+	}
+	goCover_e1ca1b934b6a__3[5] = 1;c.JSON(200, gin.H{"success": true, "data": gin.H{"access_token": token, "token_type": "Bearer"}})
+}
+func (h Handler) search(c *gin.Context) {goCover_e1ca1b934b6a__4[0] = 5 ; goCover_e1ca1b934b6a__4[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__4[2] = 4 ; goCover_e1ca1b934b6a__4[3] = 1;
+	f, err := parseFilter(c)
+	if err != nil {goCover_e1ca1b934b6a__4[6] = 1;
+		fail(c, 400, err.Error())
+		return
+	}
+	goCover_e1ca1b934b6a__4[4] = 1;result, err := h.service.Search(c.Request.Context(), c.GetInt64("hospital_id"), f)
+	if err != nil {goCover_e1ca1b934b6a__4[7] = 1;
+		respondError(c, err)
+		return
+	}
+	goCover_e1ca1b934b6a__4[5] = 1;c.JSON(200, gin.H{"success": true, "data": result.Patients, "pagination": gin.H{"page": result.Page, "limit": result.Limit}})
+}
+func parseFilter(c *gin.Context) (model.Filter, error) {goCover_e1ca1b934b6a__5[0] = 27 ; goCover_e1ca1b934b6a__5[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__5[2] = 5 ; goCover_e1ca1b934b6a__5[3] = 1;
+	f := model.Filter{Page: 1, Limit: 20}
+	fields := map[string]*string{"national_id": &f.NationalID, "passport_id": &f.PassportID, "first_name": &f.FirstName, "middle_name": &f.MiddleName, "last_name": &f.LastName, "date_of_birth": &f.DateOfBirth, "phone_number": &f.PhoneNumber, "email": &f.Email}
+	// Reject malformed URL encoding rather than silently dropping a filter.
+	goCover_e1ca1b934b6a__5[4] = 1;q, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {goCover_e1ca1b934b6a__5[10] = 1;
+		return f, errors.New("invalid query")
+	}
+	goCover_e1ca1b934b6a__5[5] = 1;for k, values := range q {goCover_e1ca1b934b6a__5[11] = 1;
+		if len(values) != 1 {goCover_e1ca1b934b6a__5[13] = 1;
+			return f, errors.New("duplicate query parameter")
+		}
+		goCover_e1ca1b934b6a__5[12] = 1;value := strings.TrimSpace(values[0])
+		if ptr, ok := fields[k]; ok {goCover_e1ca1b934b6a__5[14] = 1;
+			if len(value) > 254 {goCover_e1ca1b934b6a__5[16] = 1;
+				return f, errors.New("filter is too long")
+			}
+			goCover_e1ca1b934b6a__5[15] = 1;*ptr = value
+		} else{ goCover_e1ca1b934b6a__5[17] = 1;if k == "page" || k == "limit" {goCover_e1ca1b934b6a__5[18] = 1;
+			n, e := strconv.Atoi(value)
+			if e != nil || n < 1 || (k == "limit" && n > 100) || (k == "page" && n > 1000000) {goCover_e1ca1b934b6a__5[20] = 1;
+				return f, errors.New("invalid pagination")
+			}
+			goCover_e1ca1b934b6a__5[19] = 1;if k == "page" {goCover_e1ca1b934b6a__5[21] = 1;
+				f.Page = n
+			} else{ goCover_e1ca1b934b6a__5[22] = 1;{
+				f.Limit = n
+			}}
+		} else{ goCover_e1ca1b934b6a__5[23] = 1;{
+			return f, errors.New("unknown query parameter: " + k)
+		}}}
+	}
+	goCover_e1ca1b934b6a__5[6] = 1;for _, id := range []string{f.NationalID, f.PassportID} {goCover_e1ca1b934b6a__5[24] = 1;
+		if id != "" && !idPattern.MatchString(id) {goCover_e1ca1b934b6a__5[25] = 1;
+			return f, errors.New("invalid national_id or passport_id")
+		}
+	}
+	goCover_e1ca1b934b6a__5[7] = 1;if f.DateOfBirth != "" {goCover_e1ca1b934b6a__5[26] = 1;
+		if _, err := time.Parse("2006-01-02", f.DateOfBirth); err != nil {goCover_e1ca1b934b6a__5[27] = 1;
+			return f, errors.New("date_of_birth must be YYYY-MM-DD")
+		}
+	}
+	goCover_e1ca1b934b6a__5[8] = 1;if f.Email != "" {goCover_e1ca1b934b6a__5[28] = 1;
+		address, err := mail.ParseAddress(f.Email)
+		if err != nil || address.Address != f.Email {goCover_e1ca1b934b6a__5[29] = 1;
+			return f, errors.New("invalid email")
+		}
+	}
+	goCover_e1ca1b934b6a__5[9] = 1;return f, nil
+}
+func fail(c *gin.Context, status int, message string) {goCover_e1ca1b934b6a__6[0] = 1 ; goCover_e1ca1b934b6a__6[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__6[2] = 6 ; goCover_e1ca1b934b6a__6[3] = 1;
+	c.JSON(status, gin.H{"success": false, "message": message})
+}
+func respondError(c *gin.Context, err error) {goCover_e1ca1b934b6a__7[0] = 7 ; goCover_e1ca1b934b6a__7[1] = goCover_e1ca1b934b6a_P ; goCover_e1ca1b934b6a__7[2] = 7 ; goCover_e1ca1b934b6a__7[3] = 1;
+	switch {
+	case errors.Is(err, model.ErrNotFound):goCover_e1ca1b934b6a__7[4] = 1;
+		fail(c, 404, "hospital not found")
+	case errors.Is(err, model.ErrConflict):goCover_e1ca1b934b6a__7[5] = 1;
+		fail(c, 409, "username already exists in this hospital")
+	case errors.Is(err, model.ErrUnauthorized):goCover_e1ca1b934b6a__7[6] = 1;
+		fail(c, 401, "invalid credentials")
+	case errors.Is(err, model.ErrTimeout):goCover_e1ca1b934b6a__7[7] = 1;
+		fail(c, 504, "hospital service timed out")
+	case errors.Is(err, model.ErrUpstream):goCover_e1ca1b934b6a__7[8] = 1;
+		fail(c, 502, "hospital service unavailable or invalid response")
+	default:goCover_e1ca1b934b6a__7[9] = 1;
+		fail(c, 500, "internal server error")
+	}
+}

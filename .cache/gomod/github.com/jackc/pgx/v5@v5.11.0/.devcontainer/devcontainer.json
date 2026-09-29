@@ -1,0 +1,57 @@
+{
+	"name": "${localWorkspaceFolderBasename}",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/pgx",
+
+	"containerEnv": {
+		// Where this checkout's PostgreSQL clusters, CockroachDB store and shared Unix socket
+		// directory live inside the container (scripts/lib/dev_paths.rb). Everything else in .dev/
+		// stays in the checkout; these three cannot.
+		//
+		// .dev/ is inside the /workspaces/pgx bind mount, and Docker Desktop's macOS/Windows file
+		// sharing rejects the ownership and permission changes initdb makes and is unreliable for
+		// Unix sockets. The per-version PostgreSQL containers this replaced used named volumes for
+		// exactly these two things (postgres-1x-data and pg-sockets); /persist/local is this
+		// instance's named volume and is their equivalent.
+		"PGX_DEV_RUNTIME_DIR": "/persist/local/dev",
+
+		"CLAUDE_CONFIG_DIR":  "/persist/shared/claude",
+    "CODEX_HOME":         "/persist/shared/codex",
+		"ATUIN_CONFIG_DIR":   "/persist/shared/atuin/config",
+		"ATUIN_DATA_DIR":     "/persist/shared/atuin/data",
+		"GOPATH":             "/persist/shared/go",
+		"GOCACHE":            "/persist/shared/go-cache",
+		"GOMODCACHE":         "/persist/shared/go/pkg/mod",
+		"MISE_DATA_DIR":      "/persist/shared/mise/data",
+		"MISE_CACHE_DIR":     "/persist/shared/mise/cache",
+		"PSQL_HISTORY":       "/persist/shared/psql/history"
+	},
+
+	"initializeCommand": "docker volume create devstate-shared-pgx >/dev/null",
+	"onCreateCommand": ".devcontainer/on-create.bash",
+
+	// No postStartCommand: the client certificates the TLS tests use are decoded per checkout into
+	// .dev/certs by scripts/devenv.rb, rather than into this container's /tmp on every start.
+	"postCreateCommand": ".devcontainer/post-create.bash",
+  "waitFor": "postCreateCommand",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true
+    },
+    "ghcr.io/devcontainers-extra/features/mise:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1.1.0": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "hverlin.mise-vscode",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}
