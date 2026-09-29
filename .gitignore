@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+.cache/
+bin/
+coverage.out
+coverage.html
+*.exe

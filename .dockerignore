@@ -1,0 +1,7 @@
+.git
+.env
+.env.*
+.cache
+bin
+coverage.*
+*.exe

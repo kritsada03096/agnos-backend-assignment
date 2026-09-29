@@ -1,0 +1,48 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agnos
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: agnos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agnos -d agnos_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://agnos:test_password@localhost:5432/agnos_test?sslmode=disable
+      DB_PORT: '5433'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - run: test -z "$(gofmt -l cmd internal migrations)"
+      - run: go vet ./...
+      - run: go test -race -coverpkg=./internal/... -coverprofile=coverage.out ./...
+      - run: go build ./...
+      - name: Validate and smoke test Docker stack
+        run: |
+          cp .env.example .env
+          docker compose --profile demo config --quiet
+          docker compose --profile demo up --build -d --wait
+          curl --fail http://localhost:8080/health/ready
+          pwsh -File scripts/smoke.ps1
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose --profile demo logs --no-color
+      - name: Stop stack
+        if: always()
+        run: docker compose --profile demo down
